@@ -481,6 +481,19 @@ extern usec_t g_suspend_start;
 
 extern struct DNSContext *adns;
 extern struct HBA *parsed_hba;
+extern struct MapList *map_list;
+
+struct MapList {
+	struct List maps;
+};
+
+struct HBAIdent {
+	struct List node;
+  char *mapname;
+  char *sys_name;
+  char *db_name;
+};
+
 
 static inline PgSocket * _MUSTCHECK
 pop_socket(struct StatList *slist)
@@ -514,3 +527,6 @@ void load_config(void);
 bool set_config_param(const char *key, const char *val);
 void config_for_each(void (*param_cb)(void *arg, const char *name, const char *val, bool reloadable),
 		     void *arg);
+
+struct MapList *hba_load_map( char *fn );
+char *get_usermap( const char *username, char *mapname );

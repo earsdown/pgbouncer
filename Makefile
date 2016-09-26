@@ -43,7 +43,7 @@ pgbouncer_SOURCES = \
 	include/util.h \
 	include/varcache.h
 
-pgbouncer_CPPFLAGS = -Iinclude $(CARES_CFLAGS) $(TLS_CPPFLAGS)
+pgbouncer_CPPFLAGS = -Iinclude $(CARES_CFLAGS) $(TLS_CPPFLAGS) -g -O0 -Wall
 
 # include libusual sources directly
 AM_FEATURES = libusual

@@ -42,6 +42,11 @@ struct HBAName {
 	struct StrSet *name_set;
 };
 
+struct HBAOpts {
+  char *name;
+  char *value;
+};
+
 struct HBARule {
 	struct List node;
 	enum RuleType rule_type;
@@ -51,6 +56,7 @@ struct HBARule {
 	uint8_t rule_mask[16];
 	struct HBAName db_name;
 	struct HBAName user_name;
+  struct HBAOpts auth_opts;
 };
 
 struct HBA {
@@ -78,6 +84,7 @@ struct StrSet *strset_new(CxMem *cx);
 void strset_free(struct StrSet *set);
 bool strset_add(struct StrSet *set, const char *str, unsigned int len);
 bool strset_contains(struct StrSet *set, const char *str, unsigned int len);
+bool parse_hba_auth_opt( struct HBARule *rule, char *buf);
 
 struct StrSet *strset_new(CxMem *cx)
 {
@@ -589,6 +596,11 @@ static bool parse_line(struct HBA *hba, struct TokParser *tp, int linenr, const 
 		goto failed;
 	}
 
+  if(parse_hba_auth_opt( rule, tp->buf ))
+  {
+    eat(tp,TOK_IDENT);
+  }
+
 	if (!eat(tp, TOK_EOL)) {
 		log_warning("hba line %d: unsupported parameters", linenr);
 		goto failed;
@@ -728,9 +740,129 @@ int hba_eval(struct HBA *hba, PgAddr *addr, bool is_tls, const char *dbname, con
 		if (!name_match(&rule->user_name, username, unamelen, dbname))
 			continue;
 
+    /* apply usermap */
+    if( rule->auth_opts.name )
+    {
+      username = get_usermap(username,rule->auth_opts.value);
+    }
+
 		/* rule matches */
 		return rule->rule_method;
 	}
 	return AUTH_REJECT;
 }
 
+bool parse_hba_auth_opt( struct HBARule *rule, char *buf)
+{
+  char *str = strdup(buf);
+  char *val = strchr(str, '=');
+  if ( val != NULL ) {
+    if( 
+        rule->rule_method != AUTH_PEER &&
+        rule->rule_method != AUTH_CERT
+      )
+    {
+      return false;
+    }
+    *val++ = 0;
+    rule->auth_opts.name  = str;
+    rule->auth_opts.value = val;
+    return true;
+  }
+  return false;
+}
+
+struct MapList *hba_load_map( char *fn )
+{
+  struct MapList *mlist = NULL;
+  struct HBAIdent *map_ident = NULL;
+	FILE *f = NULL;
+	char *ln = NULL;
+	size_t lnbuf = 0;
+	ssize_t len;
+	int linenr;
+  int ret;
+	struct TokParser tp;
+
+
+  mlist = malloc(sizeof *mlist);
+  list_init(&mlist->maps);
+	init_parser(&tp);
+
+	f = fopen(fn, "r");
+	if (!f)
+    return NULL;
+
+	for (linenr = 1; ; linenr++) {
+    map_ident = calloc(sizeof *map_ident, 1);
+    if (!map_ident) {
+      log_warning("hba: no mem for map_ident");
+      return NULL;
+    }
+
+		len = getline(&ln, &lnbuf, f);
+		if (len < 0)
+			break;
+    parse_from_string(&tp, ln);
+    map_ident->mapname = strdup(tp.cur_tok_str);
+    ret = eat(&tp, TOK_IDENT);
+    map_ident->sys_name = strdup(tp.cur_tok_str);
+    printf("Returned : %d\n",ret);
+    printf("%s",tp.cur_tok_str);
+    ret = eat(&tp, TOK_IDENT);
+    map_ident->db_name = strdup(tp.cur_tok_str);
+    printf("%s",tp.cur_tok_str);
+    printf("Returned : %d\n",ret);
+    ret = eat(&tp, TOK_IDENT);
+    printf("Returned : %d\n",ret);
+    ret = eat(&tp, TOK_IDENT);
+    printf("Returned : %d\n",ret);
+    list_append(&mlist->maps, &map_ident->node);
+
+		/* if (!parse_line(hba, &tp, linenr, fn)) { */
+		/* 	 Ignore line, but parse to the end. */ 
+		/* 	continue; */
+		/* } */
+	}
+
+  /* return map; */
+  return mlist;
+}
+
+char *get_usermap( const char *uname, char *map_name )
+{
+  // Chercher une règle mname matchant uname 
+  int ret;
+  struct List *el;
+  struct HBAIdent *map;
+  extern struct MapList *map_list;
+
+  if( !map_list )
+  {
+    return uname;
+  }
+
+  list_for_each(el, &map_list->maps){
+
+    map = container_of(el, struct HBAIdent, node);
+    if ( strcmp( map->mapname, map_name) != 0 ) {
+      continue;
+    }
+
+    ret =  strcmp( uname, map->sys_name);
+    if( ret == 0 )
+    {
+      return strdup(map->sys_name);
+    } else if ( map->sys_name[0] == '/' )
+    {
+      //regex case
+      return uname;
+    }
+    else
+    {
+      return uname;
+    }
+  }
+  return uname;
+
+}

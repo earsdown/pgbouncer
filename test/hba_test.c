@@ -16,6 +16,8 @@ int cf_tcp_keepidle;
 int cf_tcp_keepalive;
 int cf_tcp_socket_buffer;
 int cf_listen_port;
+struct MapList *map_list;
+
 
 static const char *method2string[] = {
 	"trust",
@@ -89,8 +91,11 @@ static void hba_test(void)
 	ssize_t len;
 	int linenr;
 	int nfailed = 0;
+  char *name = "map_ident_test.rules";
 
 	hba = hba_load_rules("hba_test.rules");
+  map_list = malloc( sizeof(map_list) );
+  map_list = hba_load_map(name);
 	if (!hba)
 		die("hbatest: did not find config");
 
@@ -115,9 +120,32 @@ static void hba_test(void)
 		printf("HBA test OK\n");
 }
 
+static void hba_map_test(void)
+{
+  struct List *el;
+  struct HBAIdent *map;
+
+  char *name = "map_ident_test.rules";
+  map_list = malloc( sizeof(map_list) );
+  map_list = hba_load_map(name);
+
+  list_for_each(el, &map_list->maps){
+    map = container_of(el, struct HBAIdent, node);
+    char *cur_tag = "gui";
+    if ( strcmp( map->mapname, cur_tag) == 0 ) {
+      continue;
+    }
+    printf("\nTag : %s",map->mapname);
+    printf("\nSys : %s",map->sys_name);
+    printf("\nDB  : %s",map->db_name);
+    printf("\n");
+  }
+  return;
+}
 int main(void)
 {
 	hba_test();
+  hba_map_test();
 	return 0;
 }
 
