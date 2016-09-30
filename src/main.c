@@ -390,7 +390,7 @@ void load_config(void)
 
 	if (cf_auth_type == AUTH_HBA) {
 		struct HBA *hba = hba_load_rules(cf_auth_hba_file);
-		map_list = hba_load_map(cf_auth_ident_file);
+		hba_load_map(cf_auth_ident_file, map_list);
 		if (hba) {
 			if (parsed_hba)
 				hba_free(parsed_hba);
@@ -821,7 +821,6 @@ int main(int argc, char *argv[])
 	bool did_takeover = false;
 	char *arg_username = NULL;
 	int long_idx;
-  map_list = malloc( sizeof(map_list) );
 
 	static const struct option long_options[] = {
 		{"quiet", no_argument, NULL, 'q'},
@@ -834,6 +833,7 @@ int main(int argc, char *argv[])
 		{NULL, 0, NULL, 0}
 	};
 
+  map_list = malloc( sizeof(map_list) );
 	setprogname(basename(argv[0]));
 
 	/* parse cmdline */

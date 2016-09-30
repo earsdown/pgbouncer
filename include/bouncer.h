@@ -528,5 +528,5 @@ bool set_config_param(const char *key, const char *val);
 void config_for_each(void (*param_cb)(void *arg, const char *name, const char *val, bool reloadable),
 		     void *arg);
 
-struct MapList *hba_load_map( char *fn );
-char *get_usermap( const char *username, char *mapname );
+void hba_load_map( char *fn, struct MapList *map_list);
+void get_usermap( char *username, char *mapname );

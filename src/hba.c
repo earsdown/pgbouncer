@@ -21,6 +21,7 @@
 #include <usual/cxextra.h>
 #include <usual/cbtree.h>
 #include <usual/fileutil.h>
+#include <regex.h>
 
 enum RuleType {
 	RULE_LOCAL,
@@ -45,6 +46,29 @@ struct HBAName {
 struct HBAOpts {
   char *name;
   char *value;
+
+	char *usermap;
+	char *pamservice;
+	bool pam_use_hostname;
+	bool ldaptls;
+	char *ldapserver;
+	int	 ldapport;
+	char *ldapbinddn;
+	char *ldapbindpasswd;
+	char *ldapsearchattribute;
+	char *ldapbasedn;
+	int  ldapscope;
+	char *ldapprefix;
+	char *ldapsuffix;
+	bool clientcert;
+	char *krb_realm;
+	bool include_realm;
+	bool compat_realm;
+	bool upn_username;
+	char *radiusserver;
+	char *radiussecret;
+	char *radiusidentifier;
+	int  radiusport;
 };
 
 struct HBARule {
@@ -524,7 +548,7 @@ static bool parse_line(struct HBA *hba, struct TokParser *tp, int linenr, const 
 		return false;
 	}
 
-	rule = calloc(sizeof *rule, 1);
+	rule = calloc(sizeof(*rule), 1);
 	if (!rule) {
 		log_warning("hba: no mem for rule");
 		goto failed;
@@ -598,7 +622,10 @@ static bool parse_line(struct HBA *hba, struct TokParser *tp, int linenr, const 
 
   if(parse_hba_auth_opt( rule, tp->buf ))
   {
-    eat(tp,TOK_IDENT);
+    while(eat(tp,TOK_IDENT))
+    {
+      parse_hba_auth_opt( rule, tp->buf );
+    }
   }
 
 	if (!eat(tp, TOK_EOL)) {
@@ -701,7 +728,7 @@ static bool match_inet6(const struct HBARule *rule, PgAddr *addr)
 		(src[2] & mask[2]) == base[2] && (src[3] & mask[3]) == base[3];
 }
 
-int hba_eval(struct HBA *hba, PgAddr *addr, bool is_tls, const char *dbname, const char *username)
+int hba_eval(struct HBA *hba, PgAddr *addr, bool is_tls, const char *dbname, char *username)
 {
 	struct List *el;
 	struct HBARule *rule;
@@ -743,7 +770,7 @@ int hba_eval(struct HBA *hba, PgAddr *addr, bool is_tls, const char *dbname, con
     /* apply usermap */
     if( rule->auth_opts.name )
     {
-      username = get_usermap(username,rule->auth_opts.value);
+      get_usermap(username,rule->auth_opts.value);
     }
 
 		/* rule matches */
@@ -754,69 +781,391 @@ int hba_eval(struct HBA *hba, PgAddr *addr, bool is_tls, const char *dbname, con
 
 bool parse_hba_auth_opt( struct HBARule *rule, char *buf)
 {
-  char *str = strdup(buf);
-  char *val = strchr(str, '=');
+  char *name = strdup(buf);
+  char *val  = strchr(name, '=');
+  bool res = false;
+
   if ( val != NULL ) {
-    if( 
-        rule->rule_method != AUTH_PEER &&
-        rule->rule_method != AUTH_CERT
-      )
-    {
-      return false;
-    }
     *val++ = 0;
-    rule->auth_opts.name  = str;
-    rule->auth_opts.value = val;
-    return true;
+    if ( strcmp( name, "map") == 0) {
+      if( 
+          rule->rule_method != AUTH_PEER &&
+          rule->rule_method != AUTH_CERT
+        )
+      {
+        res = false;
+        goto exit;
+      }
+      rule->auth_opts.name  = strdup(name);
+      rule->auth_opts.value = strdup(val);
+      res = true;
+    }
+    else if (strcmp(name, "clientcert") == 0)
+    {
+      /*
+       * Since we require ctHostSSL, this really can never happen on
+       * non-SSL-enabled builds, so don't bother checking for USE_SSL.
+       */
+      if ( rule->rule_type != RULE_HOSTSSL )
+      {
+        log_error("clientcert can only be configured for \"hostssl\" rows");
+        res = false;
+        goto exit;
+      }
+      if (strcmp(val, "1") == 0)
+      {
+        // TODO : Check
+        // if (!secure_loaded_verify_locations())
+        // {
+        //   ereport(LOG,
+        //       (errcode(ERRCODE_CONFIG_FILE_ERROR),
+        //        errmsg("client certificates can only be checked if a root certificate store is available"),
+        //        errhint("Make sure the configuration parameter \"%s\" is set.", "ssl_ca_file"),
+        //        errcontext("line %d of configuration file \"%s\"",
+        //          line_num, HbaFileName)));
+        //   return false;
+        // }
+        rule->auth_opts.clientcert = true;
+        res = true;
+      }
+      else
+      {
+        if ( rule->rule_method == AUTH_CERT )
+        {
+          log_error("clientcert can not be set to 0 when using \"cert\" authentication");
+          res = false;
+          goto exit;
+        }
+        rule->auth_opts.clientcert = false;
+        res = true;
+      }
+    }
+    else if (strcmp(name, "pamservice") == 0)
+    {
+      /* REQUIRE_AUTH_OPTION(uaPAM, "pamservice", "pam"); */
+      rule->auth_opts.pamservice = strdup(val);
+      res = true;
+    }
+    else if (strcmp(name, "pam_use_hostname") == 0)
+    {
+      /* REQUIRE_AUTH_OPTION(uaPAM, "pam_use_hostname", "pam"); */
+      if (strcmp(val, "1") == 0)
+      {
+        rule->auth_opts.pam_use_hostname = true;
+      }
+      else
+      {
+        rule->auth_opts.pam_use_hostname = false;
+      }
+
+      res = true;
+
+    }
+    else if (strcmp(name, "ldapurl") == 0)
+    {
+// #ifdef LDAP_API_FEATURE_X_OPENLDAP
+//       LDAPURLDesc *urldata;
+//       int			rc;
+// #endif
+// 
+//       REQUIRE_AUTH_OPTION(uaLDAP, "ldapurl", "ldap");
+// #ifdef LDAP_API_FEATURE_X_OPENLDAP
+//       rc = ldap_url_parse(val, &urldata);
+//       if (rc != LDAP_SUCCESS)
+//       {
+//         ereport(LOG,
+//             (errcode(ERRCODE_CONFIG_FILE_ERROR),
+//              errmsg("could not parse LDAP URL \"%s\": %s", val, ldap_err2string(rc))));
+//         return false;
+//       }
+// 
+//       if (strcmp(urldata->lud_scheme, "ldap") != 0)
+//       {
+//         ereport(LOG,
+//             (errcode(ERRCODE_CONFIG_FILE_ERROR),
+//              errmsg("unsupported LDAP URL scheme: %s", urldata->lud_scheme)));
+//         ldap_free_urldesc(urldata);
+//         return false;
+//       }
+// 
+//       hbaline->ldapserver = pstrdup(urldata->lud_host);
+//       hbaline->ldapport = urldata->lud_port;
+//       hbaline->ldapbasedn = pstrdup(urldata->lud_dn);
+// 
+//       if (urldata->lud_attrs)
+//         hbaline->ldapsearchattribute = pstrdup(urldata->lud_attrs[0]);		/* only use first one */
+//       hbaline->ldapscope = urldata->lud_scope;
+//       if (urldata->lud_filter)
+//       {
+//         ereport(LOG,
+//             (errcode(ERRCODE_CONFIG_FILE_ERROR),
+//              errmsg("filters not supported in LDAP URLs")));
+//         ldap_free_urldesc(urldata);
+//         return false;
+//       }
+//       ldap_free_urldesc(urldata);
+// #else							/* not OpenLDAP */
+//       ereport(LOG,
+//           (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+//            errmsg("LDAP URLs not supported on this platform")));
+// #endif   /* not OpenLDAP */
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "ldaptls") == 0)
+    {
+    //   REQUIRE_AUTH_OPTION(uaLDAP, "ldaptls", "ldap");
+    //   if (strcmp(val, "1") == 0)
+    //     hbaline->ldaptls = true;
+    //   else
+    //     hbaline->ldaptls = false;
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "ldapserver") == 0)
+    {
+    //  REQUIRE_AUTH_OPTION(uaLDAP, "ldapserver", "ldap");
+    //  hbaline->ldapserver = pstrdup(val);
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "ldapport") == 0)
+    {
+      // REQUIRE_AUTH_OPTION(uaLDAP, "ldapport", "ldap");
+      // hbaline->ldapport = atoi(val);
+      // if (hbaline->ldapport == 0)
+      // {
+      //   ereport(LOG,
+      //       (errcode(ERRCODE_CONFIG_FILE_ERROR),
+      //        errmsg("invalid LDAP port number: \"%s\"", val),
+      //        errcontext("line %d of configuration file \"%s\"",
+      //          line_num, HbaFileName)));
+      //   return false;
+      // }
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "ldapbinddn") == 0)
+    {
+      // REQUIRE_AUTH_OPTION(uaLDAP, "ldapbinddn", "ldap");
+      // hbaline->ldapbinddn = pstrdup(val);
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "ldapbindpasswd") == 0)
+    {
+      // REQUIRE_AUTH_OPTION(uaLDAP, "ldapbindpasswd", "ldap");
+      // hbaline->ldapbindpasswd = pstrdup(val);
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "ldapsearchattribute") == 0)
+    {
+      // REQUIRE_AUTH_OPTION(uaLDAP, "ldapsearchattribute", "ldap");
+      // hbaline->ldapsearchattribute = pstrdup(val);
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "ldapbasedn") == 0)
+    {
+      // REQUIRE_AUTH_OPTION(uaLDAP, "ldapbasedn", "ldap");
+      // hbaline->ldapbasedn = pstrdup(val);
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "ldapprefix") == 0)
+    {
+      // REQUIRE_AUTH_OPTION(uaLDAP, "ldapprefix", "ldap");
+      // hbaline->ldapprefix = pstrdup(val);
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "ldapsuffix") == 0)
+    {
+      // REQUIRE_AUTH_OPTION(uaLDAP, "ldapsuffix", "ldap");
+      // hbaline->ldapsuffix = pstrdup(val);
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "krb_realm") == 0)
+    {
+      // if (rule->auth_method != uaGSS &&
+      //     rule->auth_method != uaSSPI)
+        // INVALID_AUTH_OPTION("krb_realm", gettext_noop("gssapi and sspi"));
+        // hbaline->krb_realm = pstrdup(val);
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "include_realm") == 0)
+    {
+      // if (hbaline->auth_method != uaGSS &&
+      //     hbaline->auth_method != uaSSPI)
+      //   INVALID_AUTH_OPTION("include_realm", gettext_noop("gssapi and sspi"));
+      if (strcmp(val, "1") == 0)
+      {
+        rule->auth_opts.include_realm = true;
+      }
+      else
+      {
+        rule->auth_opts.include_realm = false;
+      }
+      res = true;
+    }
+    else if (strcmp(name, "compat_realm") == 0)
+    {
+      // if (hbaline->auth_method != uaSSPI)
+      //   INVALID_AUTH_OPTION("compat_realm", gettext_noop("sspi"));
+      // if (strcmp(val, "1") == 0)
+      //   hbaline->compat_realm = true;
+      // else
+      //   hbaline->compat_realm = false;
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "upn_username") == 0)
+    {
+      // if (hbaline->auth_method != uaSSPI)
+      //   INVALID_AUTH_OPTION("upn_username", gettext_noop("sspi"));
+      // if (strcmp(val, "1") == 0)
+      //   hbaline->upn_username = true;
+      // else
+      //   hbaline->upn_username = false;
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "radiusserver") == 0)
+    {
+     // struct addrinfo *gai_result;
+     //   struct addrinfo hints;
+     //   int			ret;
+  
+     //   REQUIRE_AUTH_OPTION(uaRADIUS, "radiusserver", "radius");
+  
+     //   MemSet(&hints, 0, sizeof(hints));
+     //   hints.ai_socktype = SOCK_DGRAM;
+     //   hints.ai_family = AF_UNSPEC;
+  
+     //   ret = pg_getaddrinfo_all(val, NULL, &hints, &gai_result);
+     //   if (ret || !gai_result)
+     //   {
+     //     ereport(LOG,
+     //         (errcode(ERRCODE_CONFIG_FILE_ERROR),
+     //          errmsg("could not translate RADIUS server name \"%s\" to address: %s",
+     //            val, gai_strerror(ret)),
+     //          errcontext("line %d of configuration file \"%s\"",
+     //            line_num, HbaFileName)));
+     //     if (gai_result)
+     //       pg_freeaddrinfo_all(hints.ai_family, gai_result);
+     //     return false;
+     //   }
+     //   pg_freeaddrinfo_all(hints.ai_family, gai_result);
+     //   hbaline->radiusserver = pstrdup(val);
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "radiusport") == 0)
+    {
+      // REQUIRE_AUTH_OPTION(uaRADIUS, "radiusport", "radius");
+      // hbaline->radiusport = atoi(val);
+      // if (hbaline->radiusport == 0)
+      // {
+      //   ereport(LOG,
+      //       (errcode(ERRCODE_CONFIG_FILE_ERROR),
+      //        errmsg("invalid RADIUS port number: \"%s\"", val),
+      //        errcontext("line %d of configuration file \"%s\"",
+      //          line_num, HbaFileName)));
+      //   return false;
+      // }
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "radiussecret") == 0)
+    {
+      // REQUIRE_AUTH_OPTION(uaRADIUS, "radiussecret", "radius");
+      // hbaline->radiussecret = pstrdup(val);
+        res = false;
+        goto exit;
+    }
+    else if (strcmp(name, "radiusidentifier") == 0)
+    {
+      // REQUIRE_AUTH_OPTION(uaRADIUS, "radiusidentifier", "radius");
+      // hbaline->radiusidentifier = pstrdup(val);
+        res = false;
+        goto exit;
+    }
+    else
+    {
+      log_error("unrecognized authentication option name: \"%s\"", name);
+      res = false;
+      goto exit;
+    }
   }
-  return false;
+
+exit:
+  free(name);
+  return res;
 }
 
-struct MapList *hba_load_map( char *fn )
+void hba_load_map( char *fn ,  struct MapList *mlist)
 {
-  struct MapList *mlist = NULL;
   struct HBAIdent *map_ident = NULL;
 	FILE *f = NULL;
 	char *ln = NULL;
 	size_t lnbuf = 0;
 	ssize_t len;
 	int linenr;
-  int ret;
 	struct TokParser tp;
 
+  if (!mlist) {
+    return;
+  }
 
-  mlist = malloc(sizeof *mlist);
   list_init(&mlist->maps);
 	init_parser(&tp);
 
 	f = fopen(fn, "r");
 	if (!f)
-    return NULL;
+  {
+    log_error("no ident file, please set cf_auth_ident_file");
+    return;
+  }
 
 	for (linenr = 1; ; linenr++) {
-    map_ident = calloc(sizeof *map_ident, 1);
+    map_ident = calloc(sizeof(*map_ident), 1);
     if (!map_ident) {
       log_warning("hba: no mem for map_ident");
-      return NULL;
+      return;
     }
 
 		len = getline(&ln, &lnbuf, f);
 		if (len < 0)
 			break;
+
     parse_from_string(&tp, ln);
+    
+    if( tp.cur_tok == TOK_EOL   ||
+        tp.cur_tok == TOK_FAIL  ||
+        tp.cur_tok == TOK_COMMA
+      )
+    {
+      continue;
+    }
+
     map_ident->mapname = strdup(tp.cur_tok_str);
-    ret = eat(&tp, TOK_IDENT);
+    if(!eat(&tp, TOK_IDENT))
+    {
+      continue;
+    }
+
     map_ident->sys_name = strdup(tp.cur_tok_str);
-    printf("Returned : %d\n",ret);
-    printf("%s",tp.cur_tok_str);
-    ret = eat(&tp, TOK_IDENT);
+    if(!eat(&tp, TOK_IDENT))
+    {
+      continue;
+    }
+
+
     map_ident->db_name = strdup(tp.cur_tok_str);
-    printf("%s",tp.cur_tok_str);
-    printf("Returned : %d\n",ret);
-    ret = eat(&tp, TOK_IDENT);
-    printf("Returned : %d\n",ret);
-    ret = eat(&tp, TOK_IDENT);
-    printf("Returned : %d\n",ret);
+
     list_append(&mlist->maps, &map_ident->node);
 
 		/* if (!parse_line(hba, &tp, linenr, fn)) { */
@@ -825,21 +1174,28 @@ struct MapList *hba_load_map( char *fn )
 		/* } */
 	}
 
-  /* return map; */
-  return mlist;
+	if (!eat(&tp, TOK_IDENT)) {
+		log_warning("Malformed line %d", linenr);
+	}
+
+
+  map_ident = NULL;
+  return;
 }
 
-char *get_usermap( const char *uname, char *map_name )
+void get_usermap( char *uname, char *map_name )
 {
   // Chercher une règle mname matchant uname 
-  int ret;
   struct List *el;
   struct HBAIdent *map;
   extern struct MapList *map_list;
+  char *regex;
+  int nm_len,err;
+  regex_t preg;
 
   if( !map_list )
   {
-    return uname;
+    return;
   }
 
   list_for_each(el, &map_list->maps){
@@ -849,20 +1205,78 @@ char *get_usermap( const char *uname, char *map_name )
       continue;
     }
 
-    ret =  strcmp( uname, map->sys_name);
-    if( ret == 0 )
+    if( strcmp( uname, map->sys_name) == 0 )
     {
-      return strdup(map->sys_name);
+
+      if( strlen(map->db_name) <= MAX_USERNAME )
+      {
+        strcpy( uname, map->db_name);
+      }
+      return;
+      
     } else if ( map->sys_name[0] == '/' )
     {
       //regex case
-      return uname;
-    }
-    else
-    {
-      return uname;
+      nm_len = 0;
+      while( map->sys_name[nm_len] != '\0' )
+      {
+        nm_len++;
+      }
+      nm_len--;
+      
+      regex = strdup(map->sys_name+1);
+      regex[nm_len-1] = '\0';
+
+      // Compile
+      err = regcomp (&preg, regex, REG_EXTENDED);
+      if( !err )
+      {
+        int match;
+        match = regexec (&preg, uname, 0, NULL, 0);
+        regfree (&preg);
+
+        if (match == 0)
+        {
+          
+          if( strlen(map->db_name) <= MAX_USERNAME )
+          {
+            strcpy( uname, map->db_name);
+          }
+          return;
+        }
+        else if (match == REG_NOMATCH)
+        {
+          return;
+        } 
+        else
+        {
+          char *text;
+          size_t size;
+
+          size = regerror (err, &preg, NULL, 0);
+          text = malloc (sizeof (*text) * size);
+          if (text)
+          {
+            regerror (err, &preg, text, size);
+            log_warning( "%s\n",text);
+            free (text);
+          }
+          else
+          {
+            log_warning("No memory for text");
+          }
+          return;
+        }
+      }
+      else
+      {
+        log_warning("Couldnt compile regex, no memory left");
+      }
+
+      return;
     }
   }
-  return uname;
+  return;
 
 }
+

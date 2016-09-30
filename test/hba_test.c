@@ -52,7 +52,8 @@ static char *get_token(char **ln_p)
 
 static int hba_test_eval(struct HBA *hba, char *ln, int linenr)
 {
-	const char *addr=NULL, *user=NULL, *db=NULL, *tls=NULL, *exp=NULL;
+	const char *addr=NULL,  *db=NULL, *tls=NULL, *exp=NULL;
+  char *user=NULL;
 	PgAddr pgaddr;
 	int res;
 
@@ -94,8 +95,12 @@ static void hba_test(void)
   char *name = "map_ident_test.rules";
 
 	hba = hba_load_rules("hba_test.rules");
-  map_list = malloc( sizeof(map_list) );
-  map_list = hba_load_map(name);
+  map_list = calloc(sizeof(*map_list), 1);
+
+  if( map_list )
+  {
+    hba_load_map(name,map_list);
+  }
 	if (!hba)
 		die("hbatest: did not find config");
 
@@ -124,21 +129,17 @@ static void hba_map_test(void)
 {
   struct List *el;
   struct HBAIdent *map;
-
+  char *cur_tag;
   char *name = "map_ident_test.rules";
   map_list = malloc( sizeof(map_list) );
-  map_list = hba_load_map(name);
+  hba_load_map(name, map_list);
 
   list_for_each(el, &map_list->maps){
     map = container_of(el, struct HBAIdent, node);
-    char *cur_tag = "gui";
+    cur_tag = "gui";
     if ( strcmp( map->mapname, cur_tag) == 0 ) {
       continue;
     }
-    printf("\nTag : %s",map->mapname);
-    printf("\nSys : %s",map->sys_name);
-    printf("\nDB  : %s",map->db_name);
-    printf("\n");
   }
   return;
 }

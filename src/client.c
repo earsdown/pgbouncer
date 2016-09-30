@@ -200,6 +200,7 @@ static bool finish_set_pool(PgSocket *client, bool takeover)
 
 	auth = cf_auth_type;
 	if (auth == AUTH_HBA) {
+    printf("Connecting from HBA rules\n");
 		auth = hba_eval(parsed_hba, &client->remote_addr, !!client->sbuf.tls,
 				client->db->name, client->auth_user->name);
 	}
