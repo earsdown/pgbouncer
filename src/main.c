@@ -833,7 +833,7 @@ int main(int argc, char *argv[])
 		{NULL, 0, NULL, 0}
 	};
 
-  map_list = malloc( sizeof(map_list) );
+  map_list = calloc(sizeof(*map_list), 1);
 	setprogname(basename(argv[0]));
 
 	/* parse cmdline */

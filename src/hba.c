@@ -728,13 +728,24 @@ static bool match_inet6(const struct HBARule *rule, PgAddr *addr)
 		(src[2] & mask[2]) == base[2] && (src[3] & mask[3]) == base[3];
 }
 
-int hba_eval(struct HBA *hba, PgAddr *addr, bool is_tls, const char *dbname, char *username)
+int hba_eval(struct HBA *hba, PgSocket *client)
 {
 	struct List *el;
 	struct HBARule *rule;
-	unsigned int dbnamelen = strlen(dbname);
-	unsigned int unamelen = strlen(username);
+  PgAddr *addr;
+  bool is_tls;
+  const char *dbname;
+  char *username;
+	unsigned int dbnamelen ;
+	unsigned int unamelen ;
 
+  addr     = &client->remote_addr;
+  is_tls   = !!client->sbuf.tls;
+  dbname   = client->db->name;
+  username = client->auth_user->name;
+
+  dbnamelen = strlen(dbname);
+  unamelen = strlen(username);
 	if (!hba)
 		return AUTH_REJECT;
 
@@ -770,7 +781,19 @@ int hba_eval(struct HBA *hba, PgAddr *addr, bool is_tls, const char *dbname, cha
     /* apply usermap */
     if( rule->auth_opts.name )
     {
-      get_usermap(username,rule->auth_opts.value);
+      if( rule->rule_method == AUTH_CERT && is_tls )
+      {
+        // Compare to the CN entry returned in client.c
+        if(get_usermap_tls(client->auth_user->matched_name,client->auth_user->name,rule->auth_opts.value))
+        {
+          client->auth_user->has_map = true;
+        }
+      }
+      else if ( rule->rule_method == AUTH_PEER ) {
+        // Save the current name
+        /* client->auth_user->matched_name = *username; */
+        get_usermap(username,rule->auth_opts.value);
+      }
     }
 
 		/* rule matches */
@@ -1126,6 +1149,7 @@ void hba_load_map( char *fn ,  struct MapList *mlist)
 	f = fopen(fn, "r");
 	if (!f)
   {
+		free(fn);
     log_error("no ident file, please set cf_auth_ident_file");
     return;
   }
@@ -1134,12 +1158,16 @@ void hba_load_map( char *fn ,  struct MapList *mlist)
     map_ident = calloc(sizeof(*map_ident), 1);
     if (!map_ident) {
       log_warning("hba: no mem for map_ident");
+      fclose(f);
       return;
     }
 
 		len = getline(&ln, &lnbuf, f);
 		if (len < 0)
+    {
+      free(map_ident);
 			break;
+    }
 
     parse_from_string(&tp, ln);
     
@@ -1148,18 +1176,21 @@ void hba_load_map( char *fn ,  struct MapList *mlist)
         tp.cur_tok == TOK_COMMA
       )
     {
+      free(map_ident);
       continue;
     }
 
     map_ident->mapname = strdup(tp.cur_tok_str);
     if(!eat(&tp, TOK_IDENT))
     {
+      free(map_ident);
       continue;
     }
 
     map_ident->sys_name = strdup(tp.cur_tok_str);
     if(!eat(&tp, TOK_IDENT))
     {
+      free(map_ident);
       continue;
     }
 
@@ -1180,6 +1211,9 @@ void hba_load_map( char *fn ,  struct MapList *mlist)
 
 
   map_ident = NULL;
+  free(ln);
+  fclose(f);
+  free_parser(&tp);
   return;
 }
 
@@ -1225,7 +1259,7 @@ void get_usermap( char *uname, char *map_name )
       nm_len--;
       
       regex = strdup(map->sys_name+1);
-      regex[nm_len-1] = '\0';
+      /* regex[nm_len-1] = '\0'; */
 
       // Compile
       err = regcomp (&preg, regex, REG_EXTENDED);
@@ -1276,7 +1310,22 @@ void get_usermap( char *uname, char *map_name )
       return;
     }
   }
+  // No rule found
   return;
 
 }
 
+bool get_usermap_tls( char *CN, char* uname, char *map_name )
+{
+  char *name = strdup(CN);
+  get_usermap(name, map_name);
+
+  if( strcmp(name, uname) == 0)
+  {
+    // There's a rule matching and submitted user
+    return true;
+  }
+
+  free(name);
+  return false;
+}

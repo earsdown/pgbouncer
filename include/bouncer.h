@@ -147,6 +147,8 @@ extern int cf_sbuf_len;
 /* buffer size for startup noise */
 #define STARTUP_BUF	1024
 
+#define RULE_HAS_MAP_MASK_ON  0x10
+#define RULE_HAS_MAP_MASK_OFF 0xFFEF
 
 /*
  * Remote/local address
@@ -272,6 +274,8 @@ struct PgUser {
 	int pool_mode;
 	int max_user_connections;	/* how much server connections are allowed */
 	int connection_count;	/* how much connections are used by user now */
+  bool has_map; // username matched a hba rule map
+	char matched_name[MAX_USERNAME];
 };
 
 /*
@@ -530,3 +534,4 @@ void config_for_each(void (*param_cb)(void *arg, const char *name, const char *v
 
 void hba_load_map( char *fn, struct MapList *map_list);
 void get_usermap( char *username, char *mapname );
+bool get_usermap_tls( char *username, char *uname, char *mapname );
