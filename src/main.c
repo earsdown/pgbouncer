@@ -896,7 +896,6 @@ int main(int argc, char *argv[])
 	check_limits();
 
 	admin_setup();
-	pam_init();
 
 	if (cf_reboot) {
 		if (check_old_process_unix()) {
@@ -924,6 +923,8 @@ int main(int argc, char *argv[])
 	signal_setup();
 	janitor_setup();
 	stats_setup();
+
+	pam_init();
 
 	if (did_takeover) {
 		takeover_finish();
